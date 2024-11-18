@@ -1,12 +1,14 @@
 from typing import Optional, Dict, List, Tuple
 import httpx
 import asyncio
-from datetime import datetime
-from models import UserProgress, Question, PlatformProgress, AggregatedStats, ProgressData, TagStats, TagStat
+from datetime import datetime, timedelta
+from models import UserProgress, Question, PlatformProgress, AggregatedStats, ProgressData, TagStats, TagStat, ProblemCounts, LanguageStat
 from leetcode_graphql import LeetCodeGraphQLService
 from pydantic import BaseModel
 import backoff
 import logging
+from redis_service import RedisService
+import os
 from urllib.parse import unquote
 
 logging.basicConfig(level=logging.INFO)
@@ -126,6 +128,43 @@ class AnalyticsService:
         self.logger = logging.getLogger('devquest.analytics')
         self.leetcode_service = LeetCodeService()
         self.graphql_service = LeetCodeGraphQLService()
+        self.redis_service = RedisService(os.getenv('REDIS_URL', 'redis://localhost:6379/0'))
+    
+    def process_problem_stats(self, stats_data: Dict) -> ProblemCounts:
+        """Process problem statistics into ProblemCounts model"""
+        if not stats_data:
+            return ProblemCounts(
+                total={},
+                solved={},
+                beats={}
+            )
+
+        # Process total counts
+        total_counts = {
+            item["difficulty"]: item["count"]
+            for item in stats_data.get("allQuestionsCount", [])
+        }
+
+        # Process solved counts
+        solved_counts = {
+            item["difficulty"]: item["count"]
+            for item in stats_data.get("matchedUser", {})
+                .get("submitStatsGlobal", {})
+                .get("acSubmissionNum", [])
+        }
+
+        # Process beats stats
+        beats_stats = {
+            item["difficulty"]: item["percentage"]
+            for item in stats_data.get("matchedUser", {})
+                .get("problemsSolvedBeatsStats", [])
+        }
+
+        return ProblemCounts(
+            total=total_counts,
+            solved=solved_counts,
+            beats=beats_stats
+        )
 
     async def sync_user_submissions(
         self,
@@ -143,19 +182,24 @@ class AnalyticsService:
             last_sync_timestamp=None
         )
         
-        tag_stats_task = self.graphql_service.fetch_user_tag_stats(
+        stats_task = self.graphql_service.fetch_all_stats(
             username,
             csrf_token,
             cookie
         )
         
-        # Execute tasks in parallel
-        submissions, tag_stats = await asyncio.gather(
+        submissions, (
+            tag_stats,
+            language_stats,
+            problem_stats,
+            calendar_data,
+            badge_data
+        ) = await asyncio.gather(
             submissions_task,
-            tag_stats_task
+            stats_task
         )
         
-        self.logger.info(f"Fetched {len(submissions)} submissions and tag stats")
+        self.logger.info(f"Fetched all data for user {user_id}")
         
         # Get or create user progress
         user_progress = await UserProgress.find_one({"user_id": user_id})
@@ -237,12 +281,91 @@ class AnalyticsService:
             
             user_progress.aggregated_stats.by_topic = topic_counts
         
+        if language_stats:
+            user_progress.aggregated_stats.by_language = [
+                LanguageStat(**lang) for lang in language_stats
+            ]
+
+        # Update problem stats
+        if problem_stats:
+            user_progress.aggregated_stats.problem_counts = self.process_problem_stats(problem_stats)
+        
+        if calendar_data:
+            user_progress.aggregated_stats.calendar_stats = (
+                self.graphql_service.process_calendar_data(calendar_data)
+            )
+        
+        if badge_data:
+            user_progress.aggregated_stats.badges = (
+                self.graphql_service.process_badge_data(badge_data)
+            )
+
         self.logger.info("Saving progress to MongoDB")
         try:
             await user_progress.save()
-            self.logger.info("Successfully saved user progress")
+            self.logger.info("Successfully saved user progress to mongodb")
+            await self.redis_service.store_aggregated_stats(
+                user_id,
+                user_progress.aggregated_stats.dict()
+            )
+            self.logger.info("Successfully saved user progress to redis")
         except Exception as e:
             self.logger.error(f"Failed to save user progress: {str(e)}", exc_info=True)
             raise
             
         return user_progress
+
+    def calculate_submission_intensity(self, count: int) -> int:
+        """Calculate color intensity based on submission count"""
+        if count == 0:
+            return 0
+        elif count <= 3:
+            return 1
+        elif count <= 6:
+            return 2
+        elif count <= 10:
+            return 3
+        else:
+            return 4  # Maximum intensity
+
+    async def get_calendar_heatmap(
+        self,
+        user_id: str,
+        year: Optional[int] = None
+    ) -> Dict:
+        """Get calendar heatmap data for visualization"""
+        user_progress = await UserProgress.find_one({"user_id": user_id})
+        if not user_progress or not user_progress.aggregated_stats.calendar_stats:
+            return {}
+
+        calendar_stats = user_progress.aggregated_stats.calendar_stats
+        year = year or datetime.now().year
+
+        # Create full year data with intensity levels
+        start_date = datetime(year, 1, 1)
+        end_date = datetime(year, 12, 31)
+        current_date = start_date
+
+        heatmap_data = {}
+        while current_date <= end_date:
+            date_str = current_date.strftime("%Y-%m-%d")
+            count = calendar_stats.submissions_by_date.get(date_str, 0)
+            intensity = self.calculate_submission_intensity(count)
+            
+            heatmap_data[date_str] = {
+                "count": count,
+                "intensity": intensity
+            }
+            
+            current_date = current_date + timedelta(days=1)
+
+        return {
+            "heatmap": heatmap_data,
+            "stats": {
+                "total_submissions": sum(calendar_stats.submissions_by_date.values()),
+                "active_days": calendar_stats.total_active_days,
+                "current_streak": calendar_stats.streak,
+                "monthly_totals": calendar_stats.monthly_submissions,
+                "yearly_totals": calendar_stats.yearly_submissions
+            }
+        }

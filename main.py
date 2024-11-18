@@ -4,6 +4,8 @@ from typing import List, Optional
 from models import UserProgress, AggregatedStats
 from config import init_db
 from tasks import sync_user_leetcode_data, celery_app, check_celery_status
+from redis_service import RedisService
+import os
 import logging
 
 logger = logging.getLogger('devquest.api')
@@ -79,11 +81,22 @@ async def get_progress(user_id: str):
         raise HTTPException(status_code=404, detail="User progress not found")
     return user_progress
 
-@app.get("/api/v1/stats/{user_id}", response_model=AggregatedStats)
+@app.get("/api/v1/stats/{user_id}")
 async def get_stats(user_id: str):
+    # Try Redis first
+    redis_service = RedisService(os.getenv('REDIS_URL', 'redis://localhost:6379/0'))
+    stats = await redis_service.get_aggregated_stats(user_id)
+    
+    if stats:
+        return stats
+
+    # Fallback to MongoDB
     user_progress = await UserProgress.find_one({"user_id": user_id})
     if not user_progress:
         raise HTTPException(status_code=404, detail="User statistics not found")
+    
+    # Cache the stats in Redis
+    await redis_service.store_aggregated_stats(user_id, user_progress.aggregated_stats.dict())
     return user_progress.aggregated_stats
 
 @app.get("/api/v1/leaderboard", response_model=List[UserProgress])

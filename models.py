@@ -31,19 +31,6 @@ class ProgressData(BaseModel):
     leetcode: Optional[PlatformProgress]
     geeksforgeeks: Optional[PlatformProgress]
 
-class UserProgress(Document):
-    user_id: Indexed(str)
-    progress_data: ProgressData
-    aggregated_stats: AggregatedStats
-    last_updated: datetime = Field(default_factory=datetime.utcnow)
-
-    class Settings:
-        name = "user_progress"
-        indexes = [
-            [("user_id", 1)],
-            [("aggregated_stats.total_solved", -1)]
-        ]
-
 class LanguageStat(BaseModel):
     languageName: str
     problemsSolved: int
@@ -64,6 +51,24 @@ class ProblemCounts(BaseModel):
     solved: Dict[str, int]  # e.g., {"All": 125, "Easy": 48, ...}
     beats: Dict[str, Optional[float]]  # e.g., {"Easy": 76.39, ...}
 
+class CalendarStreak(BaseModel):
+    current: int = 0
+    longest: int = 0  # We can track longest streak too
+
+class CalendarStats(BaseModel):
+    active_years: List[int] = Field(default_factory=list)
+    total_active_days: int = 0
+    streak: int = 0
+    # Store daily submissions as YYYY-MM-DD: count
+    submissions_by_date: Dict[str, int] = Field(default_factory=dict)
+    monthly_submissions: Dict[str, int] = Field(default_factory=dict)  # YYYY-MM: count
+    yearly_submissions: Dict[str, int] = Field(default_factory=dict)   # YYYY: count
+    streaks: CalendarStreak = Field(default_factory=CalendarStreak)
+
+class Badge(BaseModel):
+    display_name: str
+    icon_url: str
+
 class AggregatedStats(BaseModel):
     total_solved: int = 0
     by_difficulty: Dict[str, int] = Field(default_factory=dict)
@@ -72,4 +77,18 @@ class AggregatedStats(BaseModel):
     success_rate: float = 0.0
     tag_stats: Optional[TagStats] = None
     problem_counts: Optional[ProblemCounts] = None
+    calendar_stats: Optional[CalendarStats] = None
+    badges: List[Badge] = Field(default_factory=list)
 
+class UserProgress(Document):
+    user_id: Indexed(str)
+    progress_data: ProgressData
+    aggregated_stats: AggregatedStats
+    last_updated: datetime = Field(default_factory=datetime.utcnow)
+
+    class Settings:
+        name = "user_progress"
+        indexes = [
+            [("user_id", 1)],
+            [("aggregated_stats.total_solved", -1)]
+        ]
