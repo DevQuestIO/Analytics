@@ -252,12 +252,6 @@ class AnalyticsService:
                 user_progress.progress_data.leetcode.questions.append(question)
 
         self.logger.info("Updating user statistics")
-        total_solved = len([
-            q for q in user_progress.progress_data.leetcode.questions
-            if q.status == "solved"
-        ])
-        
-        user_progress.aggregated_stats.total_solved = total_solved
         user_progress.last_updated = datetime.utcnow()
 
         if tag_stats:
@@ -289,6 +283,8 @@ class AnalyticsService:
         # Update problem stats
         if problem_stats:
             user_progress.aggregated_stats.problem_counts = self.process_problem_stats(problem_stats)
+            total_solved = user_progress.aggregated_stats.problem_counts.solved.get('All')
+            user_progress.aggregated_stats.total_solved = total_solved
         
         if calendar_data:
             user_progress.aggregated_stats.calendar_stats = (

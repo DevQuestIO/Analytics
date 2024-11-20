@@ -2,9 +2,11 @@ from fastapi import FastAPI, HTTPException, Header, Query
 from celery.result import AsyncResult
 from typing import List, Optional
 from models import UserProgress, AggregatedStats
+from leetcode_service import AnalyticsService
 from config import init_db
 from tasks import sync_user_leetcode_data, celery_app, check_celery_status
 from redis_service import RedisService
+from fastapi.middleware.cors import CORSMiddleware
 import os
 import logging
 
@@ -14,6 +16,28 @@ app = FastAPI(
     title="DevQuest Analytics Service",
     description="API for managing user progress analytics",
     version="1.0.0"
+)
+
+# Configure CORS
+origins = [
+    "http://localhost:3000",      # React development server
+    "http://localhost:8000",      # FastAPI server
+    "http://localhost:5000",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:8000",
+    "http://127.0.0.1:5000",
+    # Add your production domains here
+    "https://devquest.io",
+    "https://api.devquest.io",
+    "https://www.devquest.io",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
 )
 
 @app.on_event("startup")
@@ -93,7 +117,17 @@ async def get_stats(user_id: str):
     # Fallback to MongoDB
     user_progress = await UserProgress.find_one({"user_id": user_id})
     if not user_progress:
-        raise HTTPException(status_code=404, detail="User statistics not found")
+        # call sync_user_data to fetch the data
+        analytics_service = AnalyticsService()
+        logger.info(f"Starting sync_user_submissions for user {user_id}")
+        user_progress = await analytics_service.sync_user_submissions(
+            user_id=user_id,
+            csrf_token="csrf_token",
+            cookie="cookie",
+            username=user_id
+        )
+        logger.info(f"Completed sync_user_submissions for user {user_id}")
+        # raise HTTPException(status_code=404, detail="User statistics not found")
     
     # Cache the stats in Redis
     await redis_service.store_aggregated_stats(user_id, user_progress.aggregated_stats.dict())

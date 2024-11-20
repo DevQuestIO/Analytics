@@ -25,3 +25,6 @@ types-python-dateutil==2.8.19.20240106
 typing-extensions==4.9.0
 
 aioredis==2.0.1
+
+# requests==2.32.3
+# bs4==0.0.2
