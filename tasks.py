@@ -2,7 +2,6 @@ import asyncio
 # import nest_asyncio
 from celery import Celery
 from celery.signals import worker_process_init
-from asgiref.sync import async_to_sync
 from datetime import datetime, timedelta
 import os
 from typing import List
@@ -29,8 +28,8 @@ logging.basicConfig(
 logger = logging.getLogger('devquest.tasks')
 
 # Initialize Celery with explicit Redis URL
-REDIS_URL = "redis://localhost:6379/0"
-# REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+# REDIS_URL = "redis://localhost:6379/0"
+REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
 MONGODB_URI = os.getenv('MONGODB_URI')
 DB_NAME = os.getenv('DB_NAME')
 celery_app = Celery('analytics_tasks')

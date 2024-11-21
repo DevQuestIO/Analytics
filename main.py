@@ -1,5 +1,9 @@
 from fastapi import FastAPI, HTTPException, Header, Query
 from celery.result import AsyncResult
+from sse_starlette.sse import EventSourceResponse
+import asyncio
+import json
+from datetime import datetime
 from typing import List, Optional
 from models import UserProgress, AggregatedStats
 from leetcode_service import AnalyticsService
@@ -37,7 +41,8 @@ app.add_middleware(
     allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_headers=["*"],  # Allows all headers,
+    expose_headers=["*"]
 )
 
 @app.on_event("startup")
@@ -49,10 +54,19 @@ async def sync_user_data(
     user_id: str,
     username: str = Query(..., description="LeetCode username"),
     x_csrftoken: str = Header(..., alias="x-csrftoken"),  # Changed from csrf_token to x_csrftoken
-    cookie: str = Header(...)
+    cookie: str = Header(..., alias="foo")
 ):
     logger.info(f"Received sync request for user {user_id} with username {username}")
     try:
+        # Try Redis first
+        redis_service = RedisService(os.getenv('REDIS_URL', 'redis://localhost:6379/0'))
+        stats = await redis_service.get_aggregated_stats(user_id)
+    
+        if stats:
+            return {
+                "message": "Sync already completed",
+                "stats": stats
+            }
         task = sync_user_leetcode_data.delay(
             user_id=user_id,
             username=username,
@@ -72,31 +86,57 @@ async def sync_user_data(
             detail="Failed to initiate sync"
         )
 
-@app.get("/api/v1/sync/{user_id}/status/{task_id}")
+@app.get("/api/v1/sync/{user_id}/stream/{task_id}")
 async def get_sync_status(user_id: str, task_id: str):
-    try:
-        task = sync_user_leetcode_data.AsyncResult(task_id)
-        
-        if task.ready():
-            if task.successful():
-                return {
-                    "status": "completed",
-                    "result": "Sync completed successfully"
+    async def event_generator():
+        while True:
+            # Check task status
+            try:
+                task = sync_user_leetcode_data.AsyncResult(task_id)
+                
+                if task.ready():
+                    if task.successful():
+                        # Fetch the final stats
+                        stats = await get_stats(user_id)
+                        yield {
+                            "event": "complete",
+                            "data": json.dumps({
+                                "status": "completed",
+                                "stats": stats
+                            })
+                        }
+                        break
+                    else:
+                        yield {
+                            "event": "error",
+                            "data": json.dumps({
+                                "status": "failed",
+                                "error": str(task.result)
+                            })
+                        }
+                        break
+                else:
+                    yield {
+                        "event": "progress",
+                        "data": json.dumps({
+                            "status": "in_progress",
+                            "timestamp": datetime.now().isoformat()
+                        })
+                    }
+                
+                await asyncio.sleep(2)  # Check every 2 seconds
+                
+            except Exception as e:
+                yield {
+                    "event": "error",
+                    "data": json.dumps({
+                        "status": "error",
+                        "error": str(e)
+                    })
                 }
-            else:
-                return {
-                    "status": "failed",
-                    "error": str(task.result)
-                }
-        else:
-            return {
-                "status": "in_progress"
-            }
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to check task status: {str(e)}"
-        )
+                break
+
+    return EventSourceResponse(event_generator())
 
 @app.get("/api/v1/progress/{user_id}", response_model=UserProgress)
 async def get_progress(user_id: str):
