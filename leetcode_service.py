@@ -49,7 +49,7 @@ class LeetCodeService:
         self,
         csrf_token: str,
         cookie: str,
-        last_sync_timestamp: Optional[int] = None
+        last_sync_timestamp: Optional[datetime] = None
     ) -> List[LeetCodeSubmission]:
         self.logger.info(f"Starting to fetch submissions with timestamp > {last_sync_timestamp}")
         headers = {
@@ -89,8 +89,9 @@ class LeetCodeService:
                     original_count = len(submissions)
                     submissions = [
                         sub for sub in submissions 
-                        if sub["timestamp"] > last_sync_timestamp
+                        if datetime.fromtimestamp(sub["timestamp"]) > last_sync_timestamp
                     ]
+                    # datetime.fromtimestamp(submission.timestamp)
                     self.logger.debug(f"Filtered {original_count - len(submissions)} old submissions")
                     if not submissions:
                         self.logger.info("All remaining submissions are older than last sync")
@@ -174,12 +175,26 @@ class AnalyticsService:
         cookie: str
     ) -> UserProgress:
         self.logger.info(f"Starting sync for user: {user_id}")
+
+        # Get or create user progress
+        user_progress = await UserProgress.find_one({"user_id": user_id})
+        if not user_progress:
+            user_progress = UserProgress(
+                user_id=user_id,
+                progress_data=ProgressData(
+                    leetcode=PlatformProgress(questions=[]),
+                    geeksforgeeks=None
+                ),
+                aggregated_stats=AggregatedStats()
+            )
+        
+        last_sync_timestamp = user_progress.progress_data.leetcode.questions[0].last_attempted if len(user_progress.progress_data.leetcode.questions) > 0 else None
         
         # Create tasks for parallel execution
         submissions_task = self.leetcode_service.fetch_all_submissions(
             csrf_token,
             cookie,
-            last_sync_timestamp=None
+            last_sync_timestamp=last_sync_timestamp
         )
         
         stats_task = self.graphql_service.fetch_all_stats(
@@ -200,18 +215,6 @@ class AnalyticsService:
         )
         
         self.logger.info(f"Fetched all data for user {user_id}")
-        
-        # Get or create user progress
-        user_progress = await UserProgress.find_one({"user_id": user_id})
-        if not user_progress:
-            user_progress = UserProgress(
-                user_id=user_id,
-                progress_data=ProgressData(
-                    leetcode=PlatformProgress(questions=[]),
-                    geeksforgeeks=None
-                ),
-                aggregated_stats=AggregatedStats()
-            )
 
         questions_map = {}
         for submission in submissions:
@@ -239,6 +242,7 @@ class AnalyticsService:
         existing_questions = {
             q.id: q for q in user_progress.progress_data.leetcode.questions
         }
+        new_questions = []
         
         for qid, question in questions_map.items():
             if qid in existing_questions:
@@ -246,11 +250,13 @@ class AnalyticsService:
                 existing = existing_questions[qid]
                 existing.status = question.status
                 existing.last_attempted = question.last_attempted
-                existing.attempts += 1
+                # existing.attempts += 1
             else:
                 self.logger.debug(f"Adding new question {qid}")
-                user_progress.progress_data.leetcode.questions.append(question)
+                new_questions.append(question)
+                # user_progress.progress_data.leetcode.questions.append(question)
 
+        user_progress.progress_data.leetcode.questions = new_questions + list(existing_questions.values())
         self.logger.info("Updating user statistics")
         user_progress.last_updated = datetime.utcnow()
 
