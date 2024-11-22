@@ -4,3 +4,4 @@ latest
 celerybeat-schedule.db
 devquest.log
 dump.rdb
+.pytest_cache

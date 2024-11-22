@@ -28,6 +28,7 @@ services:
       - .:/app
     depends_on:
       - redis
+      - analytics
     environment:
       - MONGODB_URI=${MONGODB_URI}
       - DB_NAME=${DB_NAME}
@@ -41,6 +42,7 @@ services:
       - .:/app
     depends_on:
       - redis
+      - analytics
     environment:
       - MONGODB_URI=${MONGODB_URI}
       - DB_NAME=${DB_NAME}
