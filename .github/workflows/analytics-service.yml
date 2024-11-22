@@ -1,0 +1,121 @@
+name: Analytics Service CI/CD
+
+on:
+  push:
+    branches: [ main ]
+
+env:
+  PYTHON_VERSION: "3.10"
+  MONGODB_URI: "mongodb://localhost:27017"
+  DB_NAME: "test_devquest"
+  REDIS_URL: "redis://localhost:6379/0"
+  ENVIRONMENT: "test"
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    
+    services:
+      mongodb:
+        image: mongo:6
+        ports:
+          - 27017:27017
+          
+      redis:
+        image: redis:6
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          
+    steps:
+    - uses: actions/checkout@v3
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+          
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    # - name: Run Lint
+    #   run: |
+    #     pip install flake8
+    #     flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+    #     flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+        
+    - name: Run tests with coverage
+      run: |
+        pytest test_analytics_service.py -v --cov=. --cov-report=xml --cov-report=html
+        
+    - name: Upload coverage reports
+      uses: actions/upload-artifact@v3
+      with:
+        name: coverage-reports
+        path: |
+          coverage.xml
+          htmlcov
+        retention-days: 14
+
+  # deploy-aws:
+  #   needs: build-and-test
+  #   runs-on: ubuntu-latest
+  #   if: github.ref == 'refs/heads/main' # Only deploy from main branch
+    
+  #   steps:
+  #   - uses: actions/checkout@v3
+    
+  #   - name: Configure AWS credentials
+  #     uses: aws-actions/configure-aws-credentials@v4
+  #     with:
+  #       aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  #       aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  #       aws-region: ${{ secrets.AWS_REGION }}
+        
+  #   - name: Login to Amazon ECR
+  #     id: login-ecr
+  #     uses: aws-actions/amazon-ecr-login@v2
+        
+  #   - name: Build and push Docker image
+  #     env:
+  #       ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+  #       ECR_REPOSITORY: devquest-analytics
+  #       IMAGE_TAG: ${{ github.sha }}
+  #     run: |
+  #       docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+  #       docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        
+  #   - name: Update ECS service
+  #     run: |
+  #       aws ecs update-service --cluster devquest-cluster \
+  #         --service analytics-service \
+  #         --force-new-deployment
+
+  # notify:
+  #   needs: [deploy]
+  #   if: always()
+  #   runs-on: ubuntu-latest
+    
+  #   steps:
+  #   - name: Send Slack notification
+  #     uses: 8398a7/action-slack@v3
+  #     with:
+  #       status: ${{ job.status }}
+  #       fields: repo,message,commit,author,action,eventName,ref,workflow,job,took
+  #     env:
+  #       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+  #     if: always()
