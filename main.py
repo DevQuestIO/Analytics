@@ -11,10 +11,12 @@ from config import init_db
 from tasks import sync_user_leetcode_data, celery_app, check_celery_status
 from redis_service import RedisService
 from fastapi.middleware.cors import CORSMiddleware
+from tester import setup_logging
 import os
 import logging
 
-logger = logging.getLogger('devquest.api')
+# logger = logging.getLogger('devquest.api')
+logger = setup_logging()
 
 app = FastAPI(
     title="DevQuest Analytics Service",
@@ -56,7 +58,7 @@ async def sync_user_data(
     x_csrftoken: str = Header(..., alias="x-csrftoken"),  # Changed from csrf_token to x_csrftoken
     cookie: str = Header(..., alias="foo")
 ):
-    logger.info(f"Received sync request for user {user_id} with username {username}")
+    logger.info(f"Received sync request for user {user_id} with username {username}", extra={ 'user_id': user_id })
     try:
         # Try Redis first
         redis_service = RedisService(os.getenv('REDIS_URL', 'redis://localhost:6379/0'))
@@ -85,6 +87,23 @@ async def sync_user_data(
             status_code=500,
             detail="Failed to initiate sync"
         )
+
+@app.get("/test/logging")
+async def test_logging():
+    """Endpoint to test logging pipeline"""
+    logger.debug("Debug message from test endpoint")
+    logger.info("Info message from test endpoint", extra={
+        'test_data': 'some_value',
+        'timestamp': datetime.utcnow().isoformat()
+    })
+    logger.warning("Warning message from test endpoint")
+    try:
+        raise ValueError("Test error")
+    except Exception as e:
+        logger.error("Error message from test endpoint", 
+                    exc_info=True,
+                    extra={'error_type': type(e).__name__})
+    return {"message": "Logs generated"}
 
 @app.get("/api/v1/sync/{user_id}/stream/{task_id}")
 async def get_sync_status(user_id: str, task_id: str):
@@ -151,8 +170,8 @@ async def get_stats(user_id: str):
     redis_service = RedisService(os.getenv('REDIS_URL', 'redis://localhost:6379/0'))
     stats = await redis_service.get_aggregated_stats(user_id)
     
-    if stats:
-        return stats
+    # if stats:
+    #     return stats
 
     # Fallback to MongoDB
     user_progress = await UserProgress.find_one({"user_id": user_id})
@@ -171,7 +190,8 @@ async def get_stats(user_id: str):
     
     # Cache the stats in Redis
     await redis_service.store_aggregated_stats(user_id, user_progress.aggregated_stats.dict())
-    return user_progress.aggregated_stats
+    stats = await redis_service.get_aggregated_stats(user_id)
+    return stats
 
 @app.get("/api/v1/leaderboard", response_model=List[UserProgress])
 async def get_leaderboard(limit: int = 10):

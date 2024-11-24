@@ -8,6 +8,7 @@ from typing import List
 from models import UserProgress, Question
 import logging
 from leetcode_service import AnalyticsService
+from tester import setup_logging
 from beanie import init_beanie
 from motor.motor_asyncio import AsyncIOMotorClient
 from functools import wraps
@@ -16,16 +17,16 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Configure logging
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('devquest.log'),
-        logging.StreamHandler()
-    ]
-)
+# logging.basicConfig(
+#     level=logging.DEBUG,
+#     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+#     handlers=[
+#         logging.FileHandler('devquest.log'),
+#         logging.StreamHandler()
+#     ]
+# )
 
-logger = logging.getLogger('devquest.tasks')
+logger = setup_logging()
 
 # Initialize Celery with explicit Redis URL
 # REDIS_URL = "redis://localhost:6379/0"
@@ -81,12 +82,12 @@ def setup_and_run_async(coro):
 @celery_app.task(bind=True, name='tasks.sync_user_leetcode_data')
 def sync_user_leetcode_data(self, user_id: str, csrf_token: str, cookie: str, username: str):
     """Sync task for user's LeetCode data"""
-    logger.info(f"Starting sync task for user {user_id} with task_id: {self.request.id}")
+    logger.debug(f"Starting sync task for user {user_id} with task_id: {self.request.id}", extra={"user_id": user_id})
     try:
         async def execute_sync():
             try:
                 analytics_service = AnalyticsService()
-                logger.info(f"Starting sync_user_submissions for user {user_id}")
+                logger.debug(f"Starting sync_user_submissions for user {user_id}", extra={"user_id": user_id})
                 result = await analytics_service.sync_user_submissions(
                     user_id=user_id,
                     csrf_token=csrf_token,

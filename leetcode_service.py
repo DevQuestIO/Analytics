@@ -2,6 +2,7 @@ from typing import Optional, Dict, List, Tuple
 import httpx
 import asyncio
 from datetime import datetime, timedelta
+from tester import setup_logging
 from models import UserProgress, Question, PlatformProgress, AggregatedStats, ProgressData, TagStats, TagStat, ProblemCounts, LanguageStat
 from leetcode_graphql import LeetCodeGraphQLService
 from pydantic import BaseModel
@@ -11,8 +12,9 @@ from redis_service import RedisService
 import os
 from urllib.parse import unquote
 
-logging.basicConfig(level=logging.INFO)
+# logging.basicConfig(level=logging.INFO)
 # logger = logging.getLogger(__name__)
+logger = setup_logging()
 
 class LeetCodeSubmission(BaseModel):
     id: int
@@ -27,7 +29,7 @@ class LeetCodeSubmission(BaseModel):
 
 class LeetCodeService:
     def __init__(self):
-        self.logger = logging.getLogger('devquest.leetcode')
+        self.logger = logger
         self.base_url = "https://leetcode.com/api"
         self.submission_url = f"{self.base_url}/submissions/"
         
@@ -79,7 +81,7 @@ class LeetCodeService:
                 )
                 
                 submissions = response.get("submissions_dump", [])
-                self.logger.info(f"Fetched {len(submissions)} submissions for offset {offset}")
+                self.logger.info(f"Fetched {len(submissions)} submissions for offset {offset}", extra={"offset": offset})
                 # logger.info(submissions, "submissions hereee")
                 if not submissions:
                     self.logger.info("No more submissions to fetch")
@@ -92,7 +94,7 @@ class LeetCodeService:
                         if datetime.fromtimestamp(sub["timestamp"]) > last_sync_timestamp
                     ]
                     # datetime.fromtimestamp(submission.timestamp)
-                    self.logger.debug(f"Filtered {original_count - len(submissions)} old submissions")
+                    self.logger.debug(f"Filtered {original_count - len(submissions)} old submissions", extra={"filtered": original_count - len(submissions)})
                     if not submissions:
                         self.logger.info("All remaining submissions are older than last sync")
                         break
@@ -126,7 +128,7 @@ class LeetCodeService:
 
 class AnalyticsService:
     def __init__(self):
-        self.logger = logging.getLogger('devquest.analytics')
+        self.logger = logger
         self.leetcode_service = LeetCodeService()
         self.graphql_service = LeetCodeGraphQLService()
         self.redis_service = RedisService(os.getenv('REDIS_URL', 'redis://localhost:6379/0'))
@@ -174,7 +176,7 @@ class AnalyticsService:
         username: str,
         cookie: str
     ) -> UserProgress:
-        self.logger.info(f"Starting sync for user: {user_id}")
+        self.logger.info(f"Starting sync for user: {user_id}", extra={"user_id": user_id, "username": username})
 
         # Get or create user progress
         user_progress = await UserProgress.find_one({"user_id": user_id})
@@ -214,7 +216,7 @@ class AnalyticsService:
             stats_task
         )
         
-        self.logger.info(f"Fetched all data for user {user_id}")
+        self.logger.info(f"Fetched all data for user {user_id}", extra={"user_id": user_id})
 
         questions_map = {}
         for submission in submissions:
@@ -223,7 +225,7 @@ class AnalyticsService:
             if question_id in questions_map:
                 continue
                 
-            self.logger.debug(f"Processing submission for question {submission.title}")
+            self.logger.debug(f"Processing submission for question {submission.title}", extra={"question_id": question_id})
             questions_map[question_id] = Question(
                 id=question_id,
                 name=submission.title,
@@ -257,7 +259,7 @@ class AnalyticsService:
                 # user_progress.progress_data.leetcode.questions.append(question)
 
         user_progress.progress_data.leetcode.questions = new_questions + list(existing_questions.values())
-        self.logger.info("Updating user statistics")
+        self.logger.info("Updating user statistics", extra={"user_id": user_id})
         user_progress.last_updated = datetime.utcnow()
 
         if tag_stats:
@@ -302,10 +304,10 @@ class AnalyticsService:
                 self.graphql_service.process_badge_data(badge_data)
             )
 
-        self.logger.info("Saving progress to MongoDB")
+        self.logger.info("Saving progress to MongoDB", extra={"user_id": user_id})
         try:
             await user_progress.save()
-            self.logger.info("Successfully saved user progress to mongodb")
+            self.logger.info("Successfully saved user progress to mongodb", extra={"user_id": user_id})
             await self.redis_service.store_aggregated_stats(
                 user_id,
                 user_progress.aggregated_stats.dict()
