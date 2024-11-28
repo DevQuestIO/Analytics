@@ -1,4 +1,6 @@
-from fastapi import FastAPI, HTTPException, Header, Query
+from fastapi import FastAPI, HTTPException, Header, Query, Request
+from prometheus_client import Counter, Summary, generate_latest, REGISTRY
+from starlette.responses import Response
 from celery.result import AsyncResult
 from sse_starlette.sse import EventSourceResponse
 import asyncio
@@ -24,6 +26,9 @@ app = FastAPI(
     version="1.0.0"
 )
 
+REQUEST_COUNT = Counter('app_request_count', 'Total number of requests', ['method', 'endpoint'])
+REQUEST_LATENCY = Summary('app_request_latency_seconds', 'Request latency')
+
 # Configure CORS
 origins = [
     "http://localhost:3000",      # React development server
@@ -47,9 +52,29 @@ app.add_middleware(
     expose_headers=["*"]
 )
 
+@app.middleware("http")
+async def prometheus_metrics_middleware(request: Request, call_next):
+    # Track request count by method and endpoint
+    method = request.method
+    endpoint = request.url.path
+
+    REQUEST_COUNT.labels(method=method, endpoint=endpoint).inc()
+    
+    # Measure request latency
+    with REQUEST_LATENCY.time():
+        response = await call_next(request)
+
+    return response
+
 @app.on_event("startup")
 async def startup_event():
     await init_db()
+
+@app.get("/metrics")
+async def metrics():
+    # Expose all metrics registered by prometheus_client
+    metrics_data = generate_latest(REGISTRY)
+    return Response(content=metrics_data, media_type="text/plain")
 
 @app.post("/api/v1/sync/{user_id}")
 async def sync_user_data(
