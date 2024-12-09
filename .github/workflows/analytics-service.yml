@@ -85,51 +85,17 @@ jobs:
       run: |
         docker push ${{ secrets.DOCKER_HUB_USERNAME }}/analytics-service:latest
 
-  # deploy-aws:
-  #   needs: build-and-test
-  #   runs-on: ubuntu-latest
-  #   if: github.ref == 'refs/heads/main' # Only deploy from main branch
-    
-  #   steps:
-  #   - uses: actions/checkout@v3
-    
-  #   - name: Configure AWS credentials
-  #     uses: aws-actions/configure-aws-credentials@v4
-  #     with:
-  #       aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-  #       aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-  #       aws-region: ${{ secrets.AWS_REGION }}
-        
-  #   - name: Login to Amazon ECR
-  #     id: login-ecr
-  #     uses: aws-actions/amazon-ecr-login@v2
-        
-  #   - name: Build and push Docker image
-  #     env:
-  #       ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-  #       ECR_REPOSITORY: devquest-analytics
-  #       IMAGE_TAG: ${{ github.sha }}
-  #     run: |
-  #       docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-  #       docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-        
-  #   - name: Update ECS service
-  #     run: |
-  #       aws ecs update-service --cluster devquest-cluster \
-  #         --service analytics-service \
-  #         --force-new-deployment
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build-and-test
 
-  # notify:
-  #   needs: [deploy]
-  #   if: always()
-  #   runs-on: ubuntu-latest
-    
-  #   steps:
-  #   - name: Send Slack notification
-  #     uses: 8398a7/action-slack@v3
-  #     with:
-  #       status: ${{ job.status }}
-  #       fields: repo,message,commit,author,action,eventName,ref,workflow,job,took
-  #     env:
-  #       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-  #     if: always()
+    steps:
+    - name: Authenticate with AKS using Managed Identity
+      run: |
+        az login --identity
+        az aks get-credentials --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} --name ${{ secrets.AZURE_AKS_CLUSTER_NAME }}
+
+    - name: Deploy to Kubernetes
+      run: |
+        kubectl set image deployment/analytics analytics=pb2323/analytics-service:latest
+        kubectl rollout status deployment/analytics
